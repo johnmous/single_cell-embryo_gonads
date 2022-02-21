@@ -183,6 +183,7 @@ table(guo_testis$orig.ident)
 ```
 
 ## Combine with in house male gonads
+* R object created from: https://github.com/johnmous/single_cell-embryo_gonads/blob/main/male_gonads.Rmd
 ```{r}
 in_house_male_gonads <- readRDS("/path/to/male_gonads_no_mnn_15PCs.rds")
 combined <- merge(x = guo_testis, y = in_house_male_gonads, add.cell.ids = c("guo", "in_house"))
