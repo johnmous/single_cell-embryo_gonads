@@ -7,25 +7,9 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
-```
-
-## Including Plots
-
-You can also embed plots, for example:
-
-
-
+## Load libraries
 ```{r, echo=TRUE, error=TRUE}
 .libPaths()
-
 
 setwd("##########")
 outputDir = getwd()
@@ -51,19 +35,15 @@ library("colorspace")
 hcl_palettes(plot = TRUE)
 
 sessionInfo()
-
 ```
 
 
 
 ##read data
 ```{r, echo=TRUE, error=TRUE}
-
 fetalmale <- readRDS("combined_mnn_pcs15_res_0.4.rds")
 fetalmeso <- readRDS("mesonephros_male_no_mnn.rds")
 fetalfemale <- readRDS("female_gonads_mnn.rds")
-
-
 ```
 
 
@@ -105,8 +85,6 @@ FeaturePlot(object = fetalmale, features = c('PAX8', 'KRT19'), reduction = "umap
 
 ###########Fig S1B######################
 FeaturePlot(object = fetalmale, features = c('NR2F2','TCF21', "PDGFRA", "POU5F1", "DDX4", "RGS5", "PECAM1", "CD53", "AMH", "SOX9", "CYP17A1", "INSL3", "TOP2A", "MKI67", "HBA1", "NPHS2", "PTPRO", "CLIC5"), reduction = "umap")
-
-
 ```
 
 
@@ -178,7 +156,6 @@ rete2 <- RunUMAP(rete2,  reduction = "mnn",dims = 1:20)
 DimPlot(rete2, reduction = "umap")
 DimPlot(rete2, reduction = "umap", group.by = "age")
 DimPlot(rete2, reduction = "umap", group.by = "origin")
-
 ```
 
 
@@ -221,7 +198,6 @@ ggplot(df, aes(fill=Var1, y=perct2, x=Var2, label = Var1)) +
 ############Figure 2G###############
 FeatureScatter(rete2, feature1 = "PAX8", feature2 = "AMH", cells = colnames(rete2)[which(Idents(rete2)=="3")], group.by = 'age', pt.size = 2)
 FeatureScatter(rete2, feature1 = "PAX8", feature2 = "GATM", cells = colnames(rete2)[which(Idents(rete2)=="3")], group.by = 'age', pt.size = 2)
-
 ```
 
 
@@ -234,7 +210,6 @@ FeaturePlot(object = rete2, features = c("ALDH1A2", "PDPN","PODXL"), reduction =
 
 ############Figure S3C###############
 FeaturePlot(object = rete2, features = c("DMRT1", "SOX9", "NR5A1", "CDH1", "KRT8", "WT1"), reduction = "umap") 
-
 ```
 
 
