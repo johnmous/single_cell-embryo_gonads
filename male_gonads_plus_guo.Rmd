@@ -1,0 +1,295 @@
+---
+title: "Standard Workflow J. Guo dataset plus in house"
+output:
+  html_document:
+    keep_md: true
+    smart: false
+    toc: true
+    toc_float: true
+    theme: united
+date: 'Compiled: `r format(Sys.Date(), "%B %d, %Y")`'
+---
+***
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  cache.lazy = FALSE,
+  tidy = TRUE
+)
+```
+
+# J. Guo testis dataset
+* 10.1016/j.stem.2020.12.004
+
+## Libraries
+```{r}
+suppressMessages(library(plotly))
+suppressMessages(library(Seurat))
+suppressMessages(library(dplyr))
+suppressMessages(library(Matrix))
+suppressMessages(library(topGO))
+suppressMessages(library(org.Hs.eg.db))
+suppressMessages(library(gplots))
+suppressMessages(library(genefilter))
+suppressMessages(library(future))
+suppressMessages(library(batchelor))
+suppressMessages(library(SeuratWrappers))
+suppressMessages(library(gprofiler2))
+
+## We can use multiple cores for some functions, see: https://satijalab.org/seurat/v3.2/future_vignette.html
+plan("multiprocess", workers = 2)
+plan()
+options(future.globals.maxSize= 1991289600)
+outputDir = getwd()
+
+# A list of cell cycle markers, from Tirosh et al, 2015, is loaded with Seurat.  We can
+# segregate this list into markers of G2/M phase and markers of S phase
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+```
+
+## Load 
+* There are 6 separate ages
+```{r}
+week_6_data <- Read10X(data.dir = "/path/to/j_guo_male_testis/male_week_6")
+week_7_data <- Read10X(data.dir = "/path/to/j_guo_male_testis/male_week_7")
+week_8_data <- Read10X(data.dir = "/path/to/j_guo_male_testis/male_week_8")
+week_12_data <- Read10X(data.dir = "/path/to/j_guo_male_testis/male_week_12")
+week_15_data <- Read10X(data.dir = "/path/to/j_guo_male_testis/male_week_15")
+week_16_data <- Read10X(data.dir = "/path/to/j_guo_male_testis/male_week_16")
+```
+
+## Create seurat objects
+```{r}
+week_6 <- CreateSeuratObject(counts = week_6_data, project = "wpf_06")
+week_7 <- CreateSeuratObject(counts = week_7_data, project = "wpf_07")
+week_8 <- CreateSeuratObject(counts = week_8_data, project = "wpf_08")
+week_12 <- CreateSeuratObject(counts = week_12_data, project = "wpf_12")
+week_15 <- CreateSeuratObject(counts = week_15_data, project = "wpf_15")
+week_16 <- CreateSeuratObject(counts = week_16_data, project = "wpf_16")
+```
+
+
+
+## Merge Seurat objects
+* Annotate by age (Weeks Post Fertilization)
+```{r}
+guo_testis <- merge(x = week_6, 
+                    y = c(week_7, week_8, week_12, week_15, week_16), 
+                    add.cell.ids = c("wpf_06", "wpf_07", "wpf_08", "wpf_12", "wpf_15", "wpf_16"))
+table(guo_testis$orig.ident)
+```
+
+## QC
+* Remove cells expressing less than 750 genes and more than 5000
+* Remove cells with more than 10% MT 
+* Remove cells with more than 25000 UMIs
+```{r}
+guo_testis[["percent.mt"]] <- PercentageFeatureSet(guo_testis, 
+                                                   pattern = "^MT-")
+cc_genes_in_dataset <- c(s.genes, g2m.genes)[c(s.genes, g2m.genes) %in% rownames(guo_testis)]
+guo_testis[["percent.cc_genes"]] <- PercentageFeatureSet(guo_testis, 
+                                                    features = cc_genes_in_dataset)
+VlnPlot(guo_testis, 
+        features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+        ncol = 3,
+        pt.size = 0.1)
+guo_testis <- subset(guo_testis, 
+                        subset = nFeature_RNA > 750 & nFeature_RNA < 7000 & percent.mt < 10 & nCount_RNA < 50000)
+VlnPlot(guo_testis, 
+        features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), 
+        ncol = 4,
+        pt.size = 0.3)
+table(guo_testis$orig.ident)
+guo_testis[['age']] <- Idents(guo_testis)
+```
+
+## Dissociation genes on normalizeds data
+* Calculate the expression of dissociation genes as a fraction of total expression (for details see 10.1038/nmeth.4437)
+* We calculate it on normalized counts
+```{r}
+guo_testis <- NormalizeData(guo_testis, 
+                               normalization.method = "LogNormalize", 
+                               scale.factor = 50000)
+
+genesChrom <- c("Actg1__chr11","Ankrd1__chr19","Arid5a__chr1","Atf3__chr1","Atf4__chr15","Bag3__chr7","Bhlhe40__chr6",
+"Brd2__chr17","Btg1__chr10","Btg2__chr1","Ccnl1__chr3","Ccrn4l__chr3","Cebpb__chr2","Cebpd__chr16",
+"Cebpg__chr7","Csrnp1__chr9","Cxcl1__chr5","Cyr61__chr3","Dcn__chr10","Ddx3x__chrX","Ddx5__chr11",
+"Des__chr1","Dnaja1__chr4","Dnajb1__chr8","Dnajb4__chr3","Dusp1__chr17","Dusp8__chr7",
+"Egr1__chr18","Egr2__chr10","Eif1__chr11","Eif5__chr12","Erf__chr7","Errfi1__chr4","Fam132b__chr1",
+"Fos__chr12","Fosb__chr7","Fosl2__chr5","Gadd45a__chr6","Gcc1__chr6","Gem__chr4","H3f3b__chr11",
+"Hipk3__chr2","Hsp90aa1__chr12","Hsp90ab1__chr17","Hspa1a__chr17","Hspa1b__chr17","Hspa5__chr2",
+"Hspa8__chr9","Hspb1__chr5","Hsph1__chr5","Id3__chr4","Idi1__chr13","Ier2__chr8","Ier3__chr17",
+"Ifrd1__chr12","Il6__chr5","Irf1__chr11","Irf8__chr8","Itpkc__chr7","Jun__chr4","Junb__chr8",
+"Jund__chr8","Klf2__chr8","Klf4__chr4","Klf6__chr13","Klf9__chr19","Litaf__chr16","Lmna__chr3",
+"Maff__chr15","Mafk__chr5","Mcl1__chr3","Midn__chr10","Mir22hg__chr11","Mt1__chr8","Mt2__chr8",
+"Myadm__chr7","Myc__chr15","Myd88__chr9","Nckap5l__chr15","Ncoa7__chr10","Nfkbia__chr12","Nfkbiz__chr16",
+"Nop58__chr1","Nppc__chr1","Nr4a1__chr15","Odc1__chr12","Osgin1__chr8","Oxnad1__chr14","Pcf11__chr7",
+"Pde4b__chr4","Per1__chr11","Phlda1__chr10","Pnp__chr14","Pnrc1__chr4","Ppp1cc__chr5","Ppp1r15a__chr7",
+"Pxdc1__chr13","Rap1b__chr10","Rassf1__chr9","Rhob__chr12","Rhoh__chr5","Ripk1__chr13","Sat1__chrX",
+"Sbno2__chr10","Sdc4__chr2","Serpine1__chr5","Skil__chr3","Slc10a6__chr5","Slc38a2__chr15",
+"Slc41a1__chr1","Socs3__chr11","Sqstm1__chr11","Srf__chr17","Srsf5__chr12","Srsf7__chr17",
+"Stat3__chr11","Tagln2__chr1","Tiparp__chr3","Tnfaip3__chr10","Tnfaip6__chr2","Tpm3__chr3",
+"Tppp3__chr8","Tra2a__chr6","Tra2b__chr16","Trib1__chr15","Tubb4b__chr2","Tubb6__chr18",
+"Ubc__chr5","Usp2__chr9","Wac__chr18","Zc3h12a__chr4","Zfand5__chr19","Zfp36__chr7","Zfp36l1__chr12",
+"Zfp36l2__chr17","Zyx__chr6","Gadd45g__chr13","Hspe1__chr1","Ier5__chr1","Kcne4__chr1")
+
+genes <- sapply(genesChrom, function(x){
+  toupper( strsplit(x, "__")[[1]][1])
+})
+
+Data <- as.data.frame(as.matrix(GetAssayData(object = guo_testis)))
+cat("All genes:\n")
+print(unname(genes))
+write.table(genes, paste0(outputDir, "/mouseDissocGenes.tsv"), sep ="\t", quote=FALSE, row.names = FALSE)
+
+## Remove mouse only genes and put the corresponding human
+genes <- genes[!genes %in% c("CCRN4L", "MT1", "MT2")]
+genes <- c(genes, "NOCT", "MT1A", "MT2A")
+cat("Genes from mouse we miss in human:\n")
+unname(genes[!genes %in% row.names(Data)])
+
+## Calculate the percentage of UMIs maping on dissociation genes
+totalSum <- Matrix::colSums(GetAssayData(object = guo_testis))
+selection <- Data[genes, ]
+selection[is.na(selection)] <- 0
+dissociationSums <- colSums(selection)  
+countSums <- merge(totalSum, dissociationSums, by="row.names", all=TRUE, sort= FALSE)
+rownames(countSums) <- countSums$Row.names
+countSums <- countSums[-1]
+colnames(countSums) <- c("totalCount", "dissociationCounts")
+countSums$percentage <- countSums$dissociationCounts/countSums$totalCount
+## Save in meta.data of object
+guo_testis[["percent.dissoc"]] <- countSums$percentage
+
+## Draw histogram for all samples
+percentages <- guo_testis$percent.dissoc
+hist(percentages, 
+     breaks = 100, 
+     col = "lightgrey", 
+     main = paste("Expression dissociation-affected genes"), 
+xlab = "Ratio of dissociation-affected genes to total gene count", ylab = "Number of cells", xlim = c(0, 0.20))
+
+## Remove object to free up mem
+rm(Data)
+```
+
+## Keep cells with dissociation percentages below the threshold of 6%
+```{r}
+guo_testis <- subset(x = guo_testis, 
+                        subset = percent.dissoc < 0.06)
+dim(guo_testis)
+table(guo_testis$orig.ident)
+```
+
+## Combine with in house male gonads
+```{r}
+in_house_male_gonads <- readRDS("/path/to/male_gonads_no_mnn_15PCs.rds")
+combined <- merge(x = guo_testis, y = in_house_male_gonads, add.cell.ids = c("guo", "in_house"))
+```
+
+## Redo analysis
+```{r}
+combined <- NormalizeData(combined, 
+                            normalization.method = "LogNormalize", 
+                            scale.factor = 50000)
+combined <- FindVariableFeatures(combined, 
+                                  selection.method = "vst")
+combined <- ScaleData(combined) 
+```
+
+## Origin of data
+```{r}
+age <- combined[['age']]
+age$origin <- age$age
+age$origin[age$age %in% c('wpf_18', 'wpf_09a', 'wpf_09b')] <- "in_house"
+age$origin[!(age$age %in% c('wpf_18', 'wpf_09a', 'wpf_09b'))] <- "guo"
+combined[["origin"]] <- age$origin
+```
+
+## Origin of data, keep trimesters separate
+* Keep the trimeters of own dataset separate
+```{r}
+age <- combined[['age']]
+age$origin_trim <- age$age
+age$origin_trim[!(age$age %in% c('wpf_18', 'wpf_09a', 'wpf_09b'))] <- "guo"
+age$origin_trim[(age$age %in% c('wpf_18'))] <- "2nd"
+age$origin_trim[(age$age %in% c('wpf_09a', 'wpf_09b'))] <- "1st"
+combined[["origin_trim"]] <- age$origin_trim
+```
+
+## Use 30 PCs in the non-merged dataset
+* Use 30 PCs for the cluster and umap calculations, as in the paper
+```{r}
+combined <- RunPCA(combined, 
+                    verbose = FALSE)
+ElbowPlot(combined)
+combined <- FindNeighbors(combined, 
+                               dims = c(1:15))
+combined <- FindClusters(combined,
+                              resolution = 0.4)
+combined <- RunUMAP(combined, 
+                         dims = c(1:15))
+DimPlot(combined, 
+        reduction = "umap")
+ggsave("umap_clusters.pdf",
+       width = 10,
+       height = 7)
+DimPlot(combined, 
+        reduction = "umap",
+        group.by = "age")
+ggsave("umap_clusters_age.pdf",
+       width = 10,
+       height = 7)
+DimPlot(combined, 
+        reduction = "umap",
+        group.by = "origin")
+ggsave("umap_clusters_origin_mnn.pdf",
+       width = 10,
+       height = 7)
+saveRDS(object = combined, 
+        file = "combined_no_mnn.rds")
+```
+
+## Batch corrrect MNN between in house and guo
+```{r}
+combined <- RunFastMNN(object.list = SplitObject(combined, split.by = "origin_trim"))
+```
+
+## Redo with mnn correction
+* Use 30 PCs for the cluster and umap calculations, as in the paper???
+```{r}
+combined <- FindNeighbors(combined, 
+                          reduction = "mnn",
+                          dims = c(1:15))
+combined <- FindClusters(combined,
+                              resolution = 0.4)
+combined <- RunUMAP(combined,
+                    reduction = "mnn",
+                    dims = c(1:15))
+DimPlot(combined, 
+        reduction = "umap")
+ggsave("umap_clusters_mnn.pdf",
+       width = 10,
+       height = 7)
+DimPlot(combined, 
+        reduction = "umap",
+        group.by = "age")
+ggsave("umap_clusters_age_mnn.pdf",
+       width = 10,
+       height = 7)
+DimPlot(combined, 
+        reduction = "umap",
+        group.by = "origin")
+ggsave("umap_clusters_origin_mnn.pdf",
+       width = 10,
+       height = 7)
+saveRDS(object = combined, 
+        file = "combined_mnn_pcs15_res_0.4.rds")
+```
+
+
+### Session Info
+```{r}
+sessionInfo()
+```
