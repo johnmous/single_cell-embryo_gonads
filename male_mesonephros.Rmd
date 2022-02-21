@@ -1,0 +1,178 @@
+---
+title: "Seurat workflow male mesonephros"
+output:
+  html_document:
+    keep_md: true
+    smart: false
+    toc: true
+    toc_float: true
+    theme: united
+date: 'Compiled: `r format(Sys.Date(), "%B %d, %Y")`'
+---
+***
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  cache.lazy = FALSE,
+  tidy = TRUE
+)
+```
+
+# Male mesonephros 
+* Workflow with output on both batch corrected and non batch corrected 
+* Non corrected output is retaining useful information compared to the corrected 
+
+## Libraries
+```{r}
+suppressMessages(library(plotly))
+suppressMessages(library(Seurat))
+suppressMessages(library(dplyr))
+suppressMessages(library(Matrix))
+suppressMessages(library(topGO))
+suppressMessages(library(org.Hs.eg.db))
+suppressMessages(library(gplots))
+suppressMessages(library(genefilter))
+suppressMessages(library(future))
+suppressMessages(library(batchelor))
+suppressMessages(library(SeuratWrappers))
+suppressMessages(library(gprofiler2))
+suppressMessages(library(plotly))
+suppressMessages(library(gridExtra))
+
+## We can use multiple cores for some functions, see: https://satijalab.org/seurat/v3.2/future_vignette.html
+plan("multiprocess", workers = 4)
+plan()
+
+outputDir = getwd()
+
+# A list of cell cycle markers, from Tirosh et al, 2015, is loaded with Seurat.  We can
+# segregate this list into markers of G2/M phase and markers of S phase
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+```
+
+## Load Seurat object
+* Male only embryos separated in this object
+```{r}
+object <- readRDS("/path/to/mesonephros_male.rds")
+```
+
+## Add age info
+* Weeks post fertilization
+  * TK1 <- wpf_07
+  * TN1 <- wpf_11
+  * TR5 <- wpf_17
+```{r}
+subjects <- object@meta.data$cleaned_subject_ids
+subjects["TK1"] <- "wpf_07"
+subjects["TN1"] <- "wpf_11"
+subjects["TR5"] <- "wpf_17"
+names(subjects) <- colnames(object)
+object[["age"]] <- subjects
+```
+
+## QC
+* Remove cells expressing less than 750 genes, more than 7000 genes and have more than 50000 UMIs
+* Remove cells with more than 10% MT 
+* Calculate the percentage of cell cycle genes (same function as for MT genes)
+```{r}
+Idents(object) <- "mesonephros"
+object[["percent.mt"]] <- PercentageFeatureSet(object, 
+                                                      pattern = "^MT-")
+cc_genes_in_dataset <- c(s.genes, g2m.genes)[c(s.genes, g2m.genes) %in% rownames(object)]
+object[["percent.cc_genes"]] <- PercentageFeatureSet(object, 
+                                                    features = cc_genes_in_dataset)
+p1 <- VlnPlot(object, 
+             features = "nFeature_RNA", 
+             ncol = 1,
+             pt.size = 0)
+p1 <- p1 + geom_jitter(size = 0.1, alpha = 0.2) + ylim(0, NA) + theme(legend.position = "none")
+p2 <- VlnPlot(object, 
+             features = "nCount_RNA", 
+             ncol = 1,
+             pt.size = 0)
+p2 <- p2 + geom_jitter(size = 0.1, alpha = 0.2) + ylim(0, NA) + theme(legend.position = "none")
+p3 <- VlnPlot(object, 
+              features = "percent.mt", 
+              ncol = 1,
+              pt.size = 0)
+p3 <- p3 + geom_jitter(size = 0.1, alpha = 0.2) + ylim(0, NA) + theme(legend.position = "none")
+grid.arrange(p1, p2, p3, ncol=3)
+object <- subset(object, 
+                        subset = nFeature_RNA > 750 & nFeature_RNA <7000 & percent.mt < 10 & nCount_RNA < 50000)
+p1 <- VlnPlot(object, 
+             features = "nFeature_RNA", 
+             ncol = 1,
+             pt.size = 0)
+p1 <- p1 + geom_jitter(size = 0.1, alpha = 0.2) + ylim(0, NA) + theme(legend.position = "none")
+p2 <- VlnPlot(object, 
+             features = "nCount_RNA", 
+             ncol = 1,
+             pt.size = 0)
+p2 <- p2 + geom_jitter(size = 0.1, alpha = 0.2) + ylim(0, NA) + theme(legend.position = "none")
+p3 <- VlnPlot(object, 
+              features = "percent.mt", 
+              ncol = 1,
+              pt.size = 0)
+p3 <- p3 + geom_jitter(size = 0.1, alpha = 0.2) + ylim(0, NA) + theme(legend.position = "none")
+grid.arrange(p1, p2, p3, ncol=3)
+object
+```
+
+## Calculate cell cycle scores
+* Sum the expression of cell cycle genes
+```{r}
+object <- CellCycleScoring(object, 
+                                s.features = s.genes, 
+                                g2m.features = g2m.genes, 
+                                set.ident = TRUE)
+```
+
+## Dim reduction
+```{r}
+object <- RunPCA(object, 
+                        verbose = FALSE)
+object <- FindNeighbors(object, 
+                               dims = c(1:15))
+object <- FindClusters(object,
+                              resolution = 0.5)
+object <- RunUMAP(object, 
+                         dims = c(1:15))
+DimPlot(object, 
+             reduction = "umap")
+ggsave("umap_clusters.pdf",
+       width = 10,
+       height = 7)
+DimPlot(object, 
+             reduction = "umap",
+             group.by = "cleaned_subject_ids")
+ggsave("umap_subjects.pdf",
+       width = 10,
+       height = 7)
+DimPlot(object, 
+             reduction = "umap",
+             group.by = "age")
+ggsave("umap_age.pdf",
+       width = 10,
+       height = 7)
+DimPlot(object, 
+             reduction = "umap",
+             group.by = "Phase")
+ggsave("umap_phase.pdf",
+       width = 10,
+       height = 7)
+FeaturePlot(object,
+            reduction = "umap",
+            feature= "percent.cc_genes")
+FeaturePlot(object,
+            reduction = "umap",
+            feature= "percent.dissoc")
+object[["Clusters_before_mnn"]] <- Idents(object)
+saveRDS(object, 
+        file = "mesonephros_male_no_mnn.rds")
+```
+`
+### Session Info
+```{r}
+sessionInfo()
+```
