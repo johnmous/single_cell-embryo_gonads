@@ -277,11 +277,10 @@ p <- DimPlot(object,
              reduction = 'umap',
              group.by = "cleaned_subject_ids")
 ggplotly(p)
-saveRDS(object, file = "mesonephros_male.rds")
 
 ## Save only the annotated cells
 object_meso <- subset(object, cleaned_subject_ids %in% c("TK1", "TR5", "TN1"))
-saveRDS(object_meso, file = "meso_b.rds")
+saveRDS(object_meso, file = "mesonephros_male.rds")
 ```
 
 ## Subject counts
