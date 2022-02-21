@@ -1,0 +1,203 @@
+---
+title: "Standard Workflow J. Guo, own male gonads and male mesonephros"
+output:
+  html_document:
+    keep_md: true
+    smart: false
+    toc: true
+    toc_float: true
+    theme: united
+date: 'Compiled: `r format(Sys.Date(), "%B %d, %Y")`'
+---
+***
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  cache.lazy = FALSE,
+  tidy = TRUE
+)
+```
+
+# J. Guo testis dataset
+* 10.1016/j.stem.2020.12.004
+
+## Libraries
+```{r}
+suppressMessages(library(plotly))
+suppressMessages(library(Seurat))
+suppressMessages(library(dplyr))
+suppressMessages(library(Matrix))
+suppressMessages(library(topGO))
+suppressMessages(library(org.Hs.eg.db))
+suppressMessages(library(gplots))
+suppressMessages(library(genefilter))
+suppressMessages(library(future))
+suppressMessages(library(batchelor))
+suppressMessages(library(SeuratWrappers))
+suppressMessages(library(gprofiler2))
+suppressMessages(library(ggplot2))
+suppressMessages(library(gridExtra))
+
+## We can use multiple cores for some functions, see: https://satijalab.org/seurat/v3.2/future_vignette.html
+plan("multiprocess", workers = 2)
+plan()
+outputDir = getwd()
+
+# A list of cell cycle markers, from Tirosh et al, 2015, is loaded with Seurat.  We can
+# segregate this list into markers of G2/M phase and markers of S phase
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+```
+
+## Load Seurat objects
+* Guo + in house male gonads. For details refer to: https://github.com/johnmous/single_cell-embryo_gonads/blob/main/male_gonads_plus_guo.Rmd
+* Male mesonephros. For details refer to: https://github.com/johnmous/single_cell-embryo_gonads/blob/main/male_mesonephros.Rmd
+```{r}
+guo_in_house_gonads <- readRDS('/path/to/combined_mnn_pcs15_res_0.4.rds')
+Idents(guo_in_house_gonads) <- 'Gonads'
+male_mesonephros <- readRDS('/path/to/mesonephros_male_no_mnn.rds')
+Idents(male_mesonephros) <- 'Mesonephros'
+male_mesonephros[['origin']] <- 'mesonephros'
+male_mesonephros[['origin_trim']] <- 'mesonephros'
+```
+
+## Rename age of mesonephros for consistency
+```{r}
+age_wpf <- male_mesonephros[["age"]]
+age_wpf[age_wpf == "TK1"] <- "wpf_07"
+age_wpf[age_wpf == "TN1"] <- "wpf_11"
+age_wpf[age_wpf == "TR5"] <- "wpf_17"
+male_mesonephros[['age']] <- age_wpf
+table(male_mesonephros[['age']] )
+```
+
+## Merge Seurat objects
+* Annotate by age (Weeks Post Fertilization)
+```{r}
+gonads_mesonephros <- merge(x = guo_in_house_gonads, 
+                            y = male_mesonephros, 
+                            add.cell.ids = c("gonads", "mesonephros"))
+table(gonads_mesonephros[['orig.ident']])
+table(gonads_mesonephros[['age']])
+```
+
+## QC
+* Visualize QC previously applied
+```{r}
+p1 <- VlnPlot(gonads_mesonephros, 
+             features = "nFeature_RNA", 
+             ncol = 1,
+             pt.size = 0)
+p1 <- p1 + geom_jitter(size = 0.1, alpha = 0.2) + ylim(0, NA) + theme(legend.position = "none")
+p2 <- VlnPlot(gonads_mesonephros, 
+             features = "nCount_RNA", 
+             ncol = 1,
+             pt.size = 0)
+p2 <- p2 + geom_jitter(size = 0.1, alpha = 0.2) + ylim(0, NA) + theme(legend.position = "none")
+p3 <- VlnPlot(gonads_mesonephros, 
+              features = "percent.mt", 
+              ncol = 1,
+              pt.size = 0)
+p3 <- p3 + geom_jitter(size = 0.1, alpha = 0.2) + ylim(0, NA) + theme(legend.position = "none")
+grid.arrange(p1, p2, p3, ncol=3)
+```
+
+## Normalize and scale data
+```{r}
+gonads_mesonephros <- NormalizeData(gonads_mesonephros, 
+                                    normalization.method = "LogNormalize", 
+                                    scale.factor = 50000)
+gonads_mesonephros <- FindVariableFeatures(gonads_mesonephros, 
+                                           selection.method = "vst")
+gonads_mesonephros <- ScaleData(gonads_mesonephros) 
+```
+
+## Run PCA, UMAP, clustering functions
+```{r}
+gonads_mesonephros <- RunPCA(gonads_mesonephros, 
+                             verbose = FALSE)
+ElbowPlot(gonads_mesonephros)
+gonads_mesonephros <- FindNeighbors(gonads_mesonephros, 
+                                    dims = c(1:15))
+gonads_mesonephros <- FindClusters(gonads_mesonephros,
+                                   resolution = 0.4)
+gonads_mesonephros <- RunUMAP(gonads_mesonephros, 
+                              dims = c(1:15))
+DimPlot(gonads_mesonephros, 
+        reduction = "umap")
+ggsave("umap_clusters.pdf",
+       width = 10,
+       height = 7)
+DimPlot(gonads_mesonephros, 
+        reduction = "umap",
+        group.by = "age")
+ggsave("umap_clusters_age.pdf",
+       width = 10,
+       height = 7)
+DimPlot(gonads_mesonephros, 
+        reduction = "umap",
+        group.by = "origin")
+ggsave("umap_clusters_origin.pdf",
+       width = 10,
+       height = 7)
+saveRDS(object = gonads_mesonephros, 
+        file = "gonads_mesonephros_no_mnn.rds")
+```
+
+## Batch corrrect MNN between in house and guo
+* 
+```{r}
+gonads_mesonephros <- RunFastMNN(object.list = SplitObject(gonads_mesonephros, split.by = "origin_trim"))
+```
+
+## Redo with mnn correction
+* Use 30 PCs for the cluster and umap calculations, as in the paper???
+```{r}
+gonads_mesonephros <- FindNeighbors(gonads_mesonephros, 
+                                    reduction = "mnn",
+                                    dims = c(1:15))
+gonads_mesonephros <- FindClusters(gonads_mesonephros,
+                                   resolution = 0.4)
+gonads_mesonephros <- RunUMAP(gonads_mesonephros,
+                              reduction = "mnn",
+                              dims = c(1:15))
+DimPlot(gonads_mesonephros, 
+        reduction = "umap")
+ggsave("umap_clusters_mnn.pdf",
+       width = 10,
+       height = 7)
+DimPlot(gonads_mesonephros, 
+        reduction = "umap",
+        group.by = "age")
+ggsave("umap_clusters_age_mnn.pdf",
+       width = 10,
+       height = 7)
+DimPlot(gonads_mesonephros, 
+        reduction = "umap",
+        group.by = "origin")
+ggsave("umap_clusters_origin_mnn.pdf",
+       width = 10,
+       height = 7)
+saveRDS(object = gonads_mesonephros, 
+        file = "gonads_mesonephros_mnn.rds")
+```
+
+## Find markers
+```{r}
+markers <- FindAllMarkers(object = object,
+                          only.pos = TRUE,
+                          min.pct = 0.25)
+filtered_markers <- markers %>% filter(pct.1>0.6 & p_val_adj <0.05 )
+allMarkersPath = paste0(outputDir, "/gonads_mesonephros_mnn_markers_filtered.tsv")
+write.table(x = filtered_markers,
+            file = allMarkersPath,
+            sep = "\t",
+            quote = FALSE,
+            row.names = FALSE)
+```
+
+
+### Session Info
+```{r}
+sessionInfo()
+```
