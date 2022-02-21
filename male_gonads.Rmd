@@ -1,0 +1,346 @@
+---
+title: "Seurat workflow on in house male gonads"
+output:
+  html_document:
+    keep_md: true
+    smart: false
+    theme: united
+date: 'Compiled: `r format(Sys.Date(), "%B %d, %Y")`'
+---
+***
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  cache.lazy = FALSE,
+  tidy = TRUE
+)
+```
+
+## Libraries
+```{r}
+suppressMessages(library(plotly))
+suppressMessages(library(Seurat))
+suppressMessages(library(dplyr))
+suppressMessages(library(Matrix))
+suppressMessages(library(gplots))
+suppressMessages(library(genefilter))
+suppressMessages(library(future))
+suppressMessages(library(batchelor))
+suppressMessages(library(SeuratWrappers))
+
+## We can use multiple cores for some functions, see: https://satijalab.org/seurat/v3.2/future_vignette.html
+plan("multiprocess", workers = 2)
+plan()
+
+outputDir = getwd()
+
+# A list of cell cycle markers, from Tirosh et al, 2015, is loaded with Seurat.  We can
+# segregate this list into markers of G2/M phase and markers of S phase
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+
+sessionInfo()
+```
+
+## Load data and create objects for male cells
+| Sample | n. of Cells | Median n. of Genes | Trimester | Gender | Embryo | Other Info |
+| ----- | ----- | ----- | ----- | ----- | ----- | ----- |
+| G1 | 1705 | 2606 | 1st | F | ? | - |
+| G2 | 1881 | 2394 | 2nd | F | MH1 | 18 weeks old |
+| G3 | 4857 | 2166 | 1st | M | ? | - | 
+| G4 | 5672 | 1400 | 2nd | M | ? | - |
+```{r}
+G3_data <- Read10X_h5(filename = "/path/to/G3/outs/filtered_gene_bc_matrices_h5.h5")
+G4_data <- Read10X_h5(filename = "/path/to/G4/outs/filtered_gene_bc_matrices_h5.h5")
+G3 <- CreateSeuratObject(counts = G3_data, 
+                         min.cells = 3,
+                         min.features = 100,
+                         project = "G3")
+G4 <- CreateSeuratObject(counts = G4_data, 
+                         min.cells = 3,
+                         min.features = 100,
+                         project = "G4")
+```
+
+## Merge Seurat objects
+* Anotate by sex and trimester
+```{r}
+male_gonads <- merge(x = G3, 
+                     y = G4, 
+                     add.cell.ids = c("G3", "G4"))
+batch <- male_gonads$orig.ident
+
+age <- replace(batch, batch=="G3", "1st")
+age <- replace(age, age=="G4", "2nd")
+table(age)
+male_gonads[["age"]] <- age
+
+table(male_gonads$orig.ident)
+```
+
+## SCSM
+```{r}
+cell_id2calledS <- read.table(file = "/path/to/gonads_cell_id2calledS.tsv",
+                       header = TRUE,
+                       sep = "\t")
+calledS <- cell_id2calledS$calledS
+names(calledS) <- gsub(pattern = ":", replacement = "_", x = cell_id2calledS$cell_bc)
+male_gonads <- AddMetaData(object = male_gonads,
+                           metadata = calledS,
+                           col.name = "scsm")
+table(male_gonads[["scsm"]])
+```
+
+## Remove the 74 cells that are doublets, according to SCSM
+* Then rename (weeks post fertilization):
+  * SID04 => wpf_09a
+  * SID05 => wpf_09b
+  * SID06 => wpf_18
+```{r}
+male_gonads <- subset(male_gonads, scsm!= "doublet")
+table(male_gonads[["scsm"]])
+
+scsm <- male_gonads[["scsm"]]$scsm
+names(scsm) <- colnames(male_gonads)
+scsm[scsm == "SID04"] <- "wpf_09a"
+scsm[scsm == "SID05"] <- "wpf_09b"
+scsm[scsm == "SID06"] <- "wpf_18"
+male_gonads[["age"]] <- scsm
+table(male_gonads[["age"]])
+```
+
+
+## QC
+* Remove cells expressing less than 500 genes. We do not set an upper limit for now, as we have seen germ cells expressing more genes than soma cells and we would like to keep both in
+* Remove cells with more than 10% MT 
+* Calculate the percentage of cell cycle genes (same function as for MT genes)
+```{r}
+male_gonads[["percent.mt"]] <- PercentageFeatureSet(male_gonads, 
+                                                      pattern = "^MT-")
+cc_genes_in_dataset <- c(s.genes, g2m.genes)[c(s.genes, g2m.genes) %in% rownames(male_gonads)]
+male_gonads[["percent.cc_genes"]] <- PercentageFeatureSet(male_gonads, 
+                                                    features = cc_genes_in_dataset)
+VlnPlot(male_gonads, 
+        features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.cc_genes"), 
+        ncol = 4,
+        pt.size = 0.3)
+male_gonads <- subset(male_gonads, 
+                        subset = nFeature_RNA > 750 & nFeature_RNA <7000 & percent.mt < 10 & nCount_RNA < 50000)
+VlnPlot(male_gonads, 
+        features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.cc_genes"), 
+        ncol = 4,
+        pt.size = 0.3)
+table(male_gonads$orig.ident)
+```
+
+## Dissociation genes on normalizeds data
+* Calculate the expression of dissociation genes as a fraction of total expression (for details see 10.1038/nmeth.4437)
+* We calculate it on normalized counts
+```{r}
+male_gonads <- NormalizeData(male_gonads, 
+                               normalization.method = "LogNormalize", 
+                               scale.factor = 50000)
+
+genesChrom <- c("Actg1__chr11","Ankrd1__chr19","Arid5a__chr1","Atf3__chr1","Atf4__chr15","Bag3__chr7","Bhlhe40__chr6",
+"Brd2__chr17","Btg1__chr10","Btg2__chr1","Ccnl1__chr3","Ccrn4l__chr3","Cebpb__chr2","Cebpd__chr16",
+"Cebpg__chr7","Csrnp1__chr9","Cxcl1__chr5","Cyr61__chr3","Dcn__chr10","Ddx3x__chrX","Ddx5__chr11",
+"Des__chr1","Dnaja1__chr4","Dnajb1__chr8","Dnajb4__chr3","Dusp1__chr17","Dusp8__chr7",
+"Egr1__chr18","Egr2__chr10","Eif1__chr11","Eif5__chr12","Erf__chr7","Errfi1__chr4","Fam132b__chr1",
+"Fos__chr12","Fosb__chr7","Fosl2__chr5","Gadd45a__chr6","Gcc1__chr6","Gem__chr4","H3f3b__chr11",
+"Hipk3__chr2","Hsp90aa1__chr12","Hsp90ab1__chr17","Hspa1a__chr17","Hspa1b__chr17","Hspa5__chr2",
+"Hspa8__chr9","Hspb1__chr5","Hsph1__chr5","Id3__chr4","Idi1__chr13","Ier2__chr8","Ier3__chr17",
+"Ifrd1__chr12","Il6__chr5","Irf1__chr11","Irf8__chr8","Itpkc__chr7","Jun__chr4","Junb__chr8",
+"Jund__chr8","Klf2__chr8","Klf4__chr4","Klf6__chr13","Klf9__chr19","Litaf__chr16","Lmna__chr3",
+"Maff__chr15","Mafk__chr5","Mcl1__chr3","Midn__chr10","Mir22hg__chr11","Mt1__chr8","Mt2__chr8",
+"Myadm__chr7","Myc__chr15","Myd88__chr9","Nckap5l__chr15","Ncoa7__chr10","Nfkbia__chr12","Nfkbiz__chr16",
+"Nop58__chr1","Nppc__chr1","Nr4a1__chr15","Odc1__chr12","Osgin1__chr8","Oxnad1__chr14","Pcf11__chr7",
+"Pde4b__chr4","Per1__chr11","Phlda1__chr10","Pnp__chr14","Pnrc1__chr4","Ppp1cc__chr5","Ppp1r15a__chr7",
+"Pxdc1__chr13","Rap1b__chr10","Rassf1__chr9","Rhob__chr12","Rhoh__chr5","Ripk1__chr13","Sat1__chrX",
+"Sbno2__chr10","Sdc4__chr2","Serpine1__chr5","Skil__chr3","Slc10a6__chr5","Slc38a2__chr15",
+"Slc41a1__chr1","Socs3__chr11","Sqstm1__chr11","Srf__chr17","Srsf5__chr12","Srsf7__chr17",
+"Stat3__chr11","Tagln2__chr1","Tiparp__chr3","Tnfaip3__chr10","Tnfaip6__chr2","Tpm3__chr3",
+"Tppp3__chr8","Tra2a__chr6","Tra2b__chr16","Trib1__chr15","Tubb4b__chr2","Tubb6__chr18",
+"Ubc__chr5","Usp2__chr9","Wac__chr18","Zc3h12a__chr4","Zfand5__chr19","Zfp36__chr7","Zfp36l1__chr12",
+"Zfp36l2__chr17","Zyx__chr6","Gadd45g__chr13","Hspe1__chr1","Ier5__chr1","Kcne4__chr1")
+
+genes <- sapply(genesChrom, function(x){
+  toupper( strsplit(x, "__")[[1]][1])
+})
+
+Data <- as.data.frame(as.matrix(GetAssayData(object = male_gonads)))
+cat("All genes:\n")
+print(unname(genes))
+write.table(genes, paste0(outputDir, "/mouseDissocGenes.tsv"), sep ="\t", quote=FALSE, row.names = FALSE)
+
+## Remove mouse only genes and put the corresponding human
+genes <- genes[!genes %in% c("CCRN4L", "MT1", "MT2")]
+genes <- c(genes, "NOCT", "MT1A", "MT2A")
+cat("Genes from mouse we miss in human:\n")
+unname(genes[!genes %in% row.names(Data)])
+
+## Calculate the percentage of UMIs maping on dissociation genes
+totalSum <- Matrix::colSums(GetAssayData(object = male_gonads))
+selection <- Data[genes, ]
+selection[is.na(selection)] <- 0
+dissociationSums <- colSums(selection)  
+countSums <- merge(totalSum, dissociationSums, by="row.names", all=TRUE, sort= FALSE)
+rownames(countSums) <- countSums$Row.names
+countSums <- countSums[-1]
+colnames(countSums) <- c("totalCount", "dissociationCounts")
+countSums$percentage <- countSums$dissociationCounts/countSums$totalCount
+## Save in meta.data of object
+male_gonads[["percent.dissoc"]] <- countSums$percentage
+
+## Draw histogram for all samples
+percentages <- male_gonads$percent.dissoc
+hist(percentages, 
+     breaks = 100, 
+     col = "lightgrey", 
+     main = paste("Expression dissociation-affected genes"), 
+xlab = "Ratio of dissociation-affected genes to total gene count", ylab = "Number of cells", xlim = c(0, 0.20))
+
+## Remove object to free up mem
+rm(Data)
+```
+
+## Keep cells with dissociation percentages below the threshold of 6%
+```{r}
+male_gonads <- subset(x = male_gonads, 
+                        subset = percent.dissoc < 0.06)
+dim(male_gonads)
+table(male_gonads$orig.ident)
+```
+
+## Variable genes, scaling
+```{r}
+male_gonads <- FindVariableFeatures(male_gonads, 
+                                      selection.method = "vst")
+male_gonads <- ScaleData(male_gonads) 
+```
+
+## Calculate cell cycle scores
+* Sum the expression of cell cycle genes
+```{r}
+male_gonads <- CellCycleScoring(male_gonads, 
+                                s.features = s.genes, 
+                                g2m.features = g2m.genes, 
+                                set.ident = TRUE)
+head(male_gonads[[]])
+```
+
+## Visualize the distribution of cell cycle markers across phase
+```{r}
+RidgePlot(male_gonads, 
+          features = c("PCNA", "TOP2A", "MCM6", "MKI67"), 
+          ncol = 2)
+```
+
+## PCA on cell cycle genes
+* Plot the non CC corrected umap
+```{r}
+male_gonads <- RunPCA(male_gonads, 
+                        features = c(s.genes, g2m.genes))
+DimPlot(male_gonads,
+        reduction = "pca",
+        group.by = "Phase")
+male_gonads <- RunPCA(male_gonads, 
+                        verbose = FALSE)
+male_gonads <- RunUMAP(male_gonads, 
+                         dims = c(1:15))
+male_gonads <- FindNeighbors(male_gonads, 
+                               dims = c(1:15))
+male_gonads <- FindClusters(male_gonads,
+                              resolution = 0.25)
+
+## Save the clusters as are before correction 
+## rename clusters that are NOT cycling
+clusters_before_corr <- as.character(male_gonads$RNA_snn_res.0.25)
+clusters_before_corr[clusters_before_corr %in% c(0,1,2,3,6,7,8,9,10,11)] <- "other"
+male_gonads[["clusters_before_corr"]] <- clusters_before_corr
+
+DimPlot(male_gonads,
+        reduction = "umap",
+        group.by = "Phase")
+DimPlot(male_gonads, 
+        reduction = "umap",
+        label = TRUE)
+```
+
+## Regress out cell cycle scores during data scaling
+```{r}
+male_gonads <- ScaleData(male_gonads, 
+                           vars.to.regress = c("S.Score", "G2M.Score", "percent.mt"))# , 
+#                           features = rownames(male_gonads))
+male_gonads <- RunPCA(male_gonads, 
+                        features = c(s.genes, g2m.genes))
+DimPlot(male_gonads,
+        reduction = "pca",
+        group.by = "Phase")
+```
+
+## Use 15 PCs in the non-merged dataset
+* Use 15 PCs for the cluster and umap calculations. 
+* Get DEGS and GO terms table
+```{r}
+male_gonads <- RunPCA(male_gonads, 
+                        verbose = FALSE)
+male_gonads <- FindNeighbors(male_gonads, 
+                               dims = c(1:15))
+male_gonads <- FindClusters(male_gonads,
+                              resolution = 0.25)
+male_gonads <- RunUMAP(male_gonads, 
+                         dims = c(1:15))
+p <- DimPlot(male_gonads, 
+             reduction = "umap",
+             label = TRUE)
+ggsave("umap_clusters_15PCs.pdf",
+       width = 10,
+       height = 7)
+ggplotly(p)
+p <- DimPlot(male_gonads, 
+             reduction = "umap",
+             group.by = "age")
+ggsave("umap_clusters_age_15PCs.pdf",
+       width = 10,
+       height = 7)
+ggplotly(p)
+p <- DimPlot(male_gonads,
+             reduction = 'umap',
+             group.by = "scsm")
+ggplotly(p)
+p <- DimPlot(male_gonads, 
+             reduction = "umap",
+             group.by = "Phase")
+ggsave("umap_clusters_phase_15PCs.pdf",
+       width = 10,
+       height = 7)
+ggplotly(p)
+p <- DimPlot(male_gonads, 
+             reduction = "umap",
+             group.by = "clusters_before_corr")
+ggplotly(p)
+FeaturePlot(male_gonads,
+            reduction = "umap",
+            feature= "percent.cc_genes")
+ggsave("umap_clusters_cc_genes_15PCs.pdf",
+       width = 10,
+       height = 7)
+FeaturePlot(male_gonads,
+            reduction = "umap",
+            feature= "percent.dissoc")
+male_gonads[["no_MNN_15PCs"]] <- male_gonads$RNA_snn_res.0.25
+## Feature plots marker genes
+markergenes <- c("DLK1", "AMH", "KRT19", "VWF", "DDX4",
+                 "NOTCH3", "PAX8", "CD53", "TOP2A", "INSL3",
+                 "INHBA", "INHA", "COL15A1", "PCOLCE", "RSPO3",
+                 "ALCAM", "STAR", "WNT6", "GATM")
+for (marker in markergenes) {
+  p <- FeaturePlot(object = male_gonads,
+              reduction = "umap",
+              features = marker)
+  print(p)
+}
+
+saveRDS(object = male_gonads, 
+        file = "male_gonads_no_mnn_15PCs.rds")
+```
