@@ -277,7 +277,7 @@ p <- DimPlot(object,
              reduction = 'umap',
              group.by = "cleaned_subject_ids")
 ggplotly(p)
-saveRDS(object, file = "sample_b.rds")
+saveRDS(object, file = "mesonephros_male.rds")
 
 ## Save only the annotated cells
 object_meso <- subset(object, cleaned_subject_ids %in% c("TK1", "TR5", "TN1"))
