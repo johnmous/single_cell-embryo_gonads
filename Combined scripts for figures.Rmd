@@ -1,0 +1,765 @@
+---
+title: "rete and mesonephros analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+
+
+```{r, echo=TRUE, error=TRUE}
+.libPaths()
+
+
+setwd("##########")
+outputDir = getwd()
+
+library(Seurat)
+library(readxl)
+library(plotly)
+library(dplyr)
+library(gplots)
+library(ComplexHeatmap)
+library(Matrix)
+library(ggplot2)
+library(matrixStats)
+library(ggpubr)
+library(SeuratWrappers)
+library(destiny)
+library(cowplot)
+library(gam)
+library(matrixStats)
+library(RColorBrewer)
+
+library("colorspace")
+hcl_palettes(plot = TRUE)
+
+sessionInfo()
+
+```
+
+
+
+##read data
+```{r, echo=TRUE, error=TRUE}
+
+fetalmale <- readRDS("combined_mnn_pcs15_res_0.4.rds")
+fetalmeso <- readRDS("mesonephros_male_no_mnn.rds")
+fetalfemale <- readRDS("female_gonads_mnn.rds")
+
+
+```
+
+
+
+
+
+##Figure 2 and Figure S1
+```{r, echo=TRUE, error=TRUE}
+
+###########Fig S1A######################
+DimPlot(object = fetalmale, 
+        reduction = "umap", group.by = "age")
+
+DimPlot(object = fetalmale, 
+        reduction = "umap", group.by = "origin")
+
+
+###########Fig 2A######################
+DimPlot(object = fetalmale, 
+        reduction = "umap", label = TRUE)
+
+##
+expr1 <- GetAssayData(object = fetalmale, slot = "data")
+colnames(expr1) <- Idents(fetalmale)
+
+meanDF <- do.call(cbind, lapply(unique(colnames(expr1)), function(id) {
+    groupCounts <- expr1[, colnames(expr1) == id]
+    df <- data.frame(c = apply(groupCounts, 1, mean))
+    colnames(df) <- id
+    return(df)
+}))
+
+distance <- dist(t(meanDF))
+hc <- hclust(distance)
+plot(hc)
+
+###########Fig 2B######################
+FeaturePlot(object = fetalmale, features = c('PAX8', 'KRT19'), reduction = "umap") 
+
+###########Fig S1B######################
+FeaturePlot(object = fetalmale, features = c('NR2F2','TCF21', "PDGFRA", "POU5F1", "DDX4", "RGS5", "PECAM1", "CD53", "AMH", "SOX9", "CYP17A1", "INSL3", "TOP2A", "MKI67", "HBA1", "NPHS2", "PTPRO", "CLIC5"), reduction = "umap")
+
+
+```
+
+
+
+##Figure 2C
+```{r, echo=TRUE, error=TRUE}
+
+length(which(Idents(fetalmale)=='7'))
+
+rete <- subset(fetalmale, idents = '7')
+
+rete <- FindVariableFeatures(rete, selection.method = "vst")
+
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(rete), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(rete)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+
+
+# Scaling the data
+all.genes <- rownames(rete)
+rete <- ScaleData(rete, features = all.genes)
+
+
+rete <- RunPCA(rete)
+
+# Examine and visualize PCA results a few different ways
+print(rete[["pca"]], dims = 1:5, nfeatures = 5)
+
+VizDimLoadings(rete, dims = 1:2, reduction = "pca")
+
+DimPlot(rete, reduction = "pca")
+DimPlot(rete, reduction = "pca", group.by = "origin")
+
+
+DimHeatmap(rete, dims = 1, cells = 500, balanced = TRUE)
+
+
+ElbowPlot(rete)
+
+##cluster
+
+rete <- FindNeighbors(rete, dims = 1:12)
+rete <- FindClusters(rete, resolution = 0.5)
+
+
+rete <- RunUMAP(rete, dims = 1:12)
+
+DimPlot(rete, reduction = "umap")
+DimPlot(rete, reduction = "umap", group.by = "age")
+DimPlot(rete, reduction = "umap", group.by = "origin")
+
+##Batch correction#######################
+rete2 <- RunFastMNN(object.list = SplitObject(rete, split.by = "origin"),k=5)
+
+##cluster
+
+rete2 <- FindNeighbors(rete2, reduction = "mnn",  dims = 1:20)
+rete2 <- FindClusters(rete2, resolution =0.4)
+
+
+rete2 <- RunUMAP(rete2,  reduction = "mnn",dims = 1:20)
+
+
+DimPlot(rete2, reduction = "umap")
+DimPlot(rete2, reduction = "umap", group.by = "age")
+DimPlot(rete2, reduction = "umap", group.by = "origin")
+
+```
+
+
+
+##Figure 2D to Figure 2H
+```{r, echo=TRUE, error=TRUE}
+
+#########Figure 2D##########
+retesub.markers <- FindAllMarkers(rete2, only.pos = TRUE, min.pct = 0.6)
+retesub.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 20, wt = avg_log2FC) -> top10
+
+rete2 <- ScaleData(rete2)
+
+DoHeatmap(rete2, features =top10$gene) 
+
+#########Figure 2E##########
+FeaturePlot(object = rete2, features = c("KRT19","PAX8", "AMH", "GATM"), reduction = "umap", ncol = 2) 
+
+#########Figure 2F##########
+df <- as.data.frame(table(Idents(rete2), rete2$age )) 
+
+# Transform this data in %
+df$perct2 <- df$Freq/sum(df$Freq[which(df$Var2=="w7")])
+df$perct2[which(df$Var2=="w8")] <- df$Freq[which(df$Var2=="w8")]/sum(df$Freq[which(df$Var2=="w8")])
+df$perct2[which(df$Var2=="9bw")] <- df$Freq[which(df$Var2=="9bw")]/sum(df$Freq[which(df$Var2=="9bw")])
+df$perct2[which(df$Var2=="9aw")] <- df$Freq[which(df$Var2=="9aw")]/sum(df$Freq[which(df$Var2=="9aw")])
+df$perct2[which(df$Var2=="w12")] <- df$Freq[which(df$Var2=="w12")]/sum(df$Freq[which(df$Var2=="w12")])
+df$perct2[which(df$Var2=="w15")] <- df$Freq[which(df$Var2=="w15")]/sum(df$Freq[which(df$Var2=="w15")])
+df$perct2[which(df$Var2=="w16")] <- df$Freq[which(df$Var2=="w16")]/sum(df$Freq[which(df$Var2=="w16")])
+df$perct2[which(df$Var2=="18w")] <- df$Freq[which(df$Var2=="18w")]/sum(df$Freq[which(df$Var2=="18w")])
+
+# Stacked
+ggplot(df, aes(fill=Var1, y=perct2, x=Var2, label = Var1)) + 
+    geom_bar(position="stack", stat="identity")+
+  geom_text(size = 3, position = position_stack(vjust = 0.5))
+
+
+############Figure 2G###############
+FeatureScatter(rete2, feature1 = "PAX8", feature2 = "AMH", cells = colnames(rete2)[which(Idents(rete2)=="3")], group.by = 'age', pt.size = 2)
+FeatureScatter(rete2, feature1 = "PAX8", feature2 = "GATM", cells = colnames(rete2)[which(Idents(rete2)=="3")], group.by = 'age', pt.size = 2)
+
+```
+
+
+
+##Figure S2A and S2C
+```{r, echo=TRUE, error=TRUE}
+
+############Figure S3A###############
+FeaturePlot(object = rete2, features = c("ALDH1A2", "PDPN","PODXL"), reduction = "umap") 
+
+############Figure S3C###############
+FeaturePlot(object = rete2, features = c("DMRT1", "SOX9", "NR5A1", "CDH1", "KRT8", "WT1"), reduction = "umap") 
+
+```
+
+
+
+
+##Figure 3 and Figure S2D, S2E
+```{r, echo=TRUE, error=TRUE}
+
+############Figure 3A###############
+DimPlot(object = fetalmeso, 
+        reduction = "umap", label = TRUE)
+
+
+DimPlot(object = fetalmeso, 
+        reduction = "umap", group.by = "age")
+
+############Figure 3B###############
+FeaturePlot(object = fetalmeso, features = c("PAX2", "LHX1", "PECAM1", "AMH", "PODXL", "CLIC5", "DLK1", "NR2F2", "GATA2", "NUPR1", "MKI67", "TOP2A"), reduction = "umap", ncol = 2)
+
+
+############Figure 3E###############
+FeaturePlot(object = fetalmeso, features = c("PAX8", "KRT19"), reduction = "umap")
+
+
+############Figure 3F###############
+VlnPlot(object = fetalmeso, features = c("PAX2", "JAG1", "PCP4", "SOX17"), idents = c('6', '7', '11'), pt.size = 0, same.y.lims = TRUE)
+
+
+############Figure S3D###############
+FeaturePlot(object = fetalmeso, features = c("DMRT1", "SOX9", "NR5A1", "CDH1", "KRT8", "WT1"), reduction = "umap") 
+
+############Figure S3E###############
+FeaturePlot(object = fetalmeso, features = c("PCP4", "JAG1", "SOX17"), reduction = "umap") 
+
+```
+
+
+##Figure S2G
+```{r, echo=TRUE, error=TRUE}
+fetalmale$clusters <- as.character(fetalmale$seurat_clusters) 
+
+R0 <- colnames(rete2)[which(Idents(rete2)=='0')]
+R1 <- colnames(rete2)[which(Idents(rete2)=='1')]
+R2 <- colnames(rete2)[which(Idents(rete2)=='2')]
+R3 <- colnames(rete2)[which(Idents(rete2)=='3')]
+R4 <- colnames(rete2)[which(Idents(rete2)=='4')]
+R5 <- colnames(rete2)[which(Idents(rete2)=='5')]
+
+fetalmale$clusters[which(colnames(fetalmale) %in% R0)] <- "R0"
+fetalmale$clusters[which(colnames(fetalmale) %in% R1)] <- "R1"
+fetalmale$clusters[which(colnames(fetalmale) %in% R2)] <- "R2"
+fetalmale$clusters[which(colnames(fetalmale) %in% R3)] <- "R3"
+fetalmale$clusters[which(colnames(fetalmale) %in% R4)] <- "R4"
+fetalmale$clusters[which(colnames(fetalmale) %in% R5)] <- "R5"
+
+fetalmale$clusters[which(Idents(fetalmale) != '7')] <- NA
+fetalmale$clusters[which(fetalmale$clusters %in% c('R2','R4','R5') )] <- NA
+
+DimPlot(fetalmale, reduction = "umap", group.by = "clusters")
+
+######################
+
+length(c(R0,R1, R3))  #456
+length(colnames(fetalmale)[-which(colnames(fetalmale) %in%  c(R0,R1, R3))] )  # error check
+ncol(fetalmale)  # error check
+
+set.seed(42)
+sampledCellIDs <- sample(x = colnames(fetalmale)[-which(colnames(fetalmale) %in% c(R0, R1, R3))], size = 456, replace = FALSE)
+
+############
+fetalmale$vlngroup <- "unselected"
+fetalmale$vlngroup[which(colnames(fetalmale) %in% sampledCellIDs )]  <- "rest"
+fetalmale$vlngroup[which(colnames(fetalmale) %in% c(R0,R1, R3) )]  <- "rete epithelial"
+
+DimPlot(object = fetalmale, 
+             reduction = "umap",
+             cells.highlight = sampledCellIDs)
+
+```
+
+
+##Figure S2H
+```{r, echo=TRUE, error=TRUE}
+
+fetalmeso$clusters <- as.character(fetalmeso$seurat_clusters) 
+fetalmeso$clusters[-which(fetalmeso$clusters %in% c('6','7','11') )] <- NA
+
+DimPlot(fetalmeso, reduction = "umap", group.by = "clusters")
+
+##############
+length(which(Idents(fetalmeso) %in% c('6', '7', '11') ))  #1216
+ncol(fetalmeso)-length(which(Idents(fetalmeso) %in% c('6', '7', '11') ))#7492
+
+set.seed(42)
+sampledCellIDs <- sample(x = colnames(fetalmeso)[-which(Idents(fetalmeso) %in% c('6', '7', '11'))], size = 1216, replace = FALSE)
+
+
+############
+fetalmeso$vlngroup <- "unselected"
+fetalmeso$vlngroup[which(colnames(fetalmeso) %in% sampledCellIDs )]  <- "rest"
+fetalmeso$vlngroup[which(Idents(fetalmeso) %in% c('6', '7', '11') )]  <- "meso epithelial"
+
+
+DimPlot(object = fetalmeso, 
+             reduction = "umap",
+             cells.highlight = sampledCellIDs)
+
+```
+
+
+##Figure 4
+```{r, echo=TRUE, error=TRUE}
+
+############Figure 4A###############
+rete.deg <- FindMarkers(fetalmale, ident.1 = c(R0,R1, R3), ident.2 = sampledCellIDs)
+rete.deg.filtered <- rete.deg %>%
+    filter(avg_log2FC > 0.5 & p_val_adj < 0.05)
+
+meso.deg <- FindMarkers(fetalmeso, ident.1 = c('6', '7', '11'), ident.2 = sampledCellIDs)
+meso.deg.filtered <- meso.deg %>%
+    filter(avg_log2FC > 0.5 & p_val_adj < 0.05)
+
+#######################volcano######################
+library(EnhancedVolcano)
+
+EnhancedVolcano(rete.deg,
+    lab = NA,
+    x = 'avg_log2FC',
+    y = 'p_val_adj',
+    pCutoff = 0.05,
+    FCcutoff = 0.5)
+
+EnhancedVolcano(meso.deg,
+    lab = NA,
+    x = 'avg_log2FC',
+    y = 'p_val_adj',
+    pCutoff = 0.05,
+    FCcutoff = 0.5)
+
+
+###############Figure 4B########################
+genelist <- c("PLAU", "LYPD1", "BCAM", "PERP", "LRRTM1", "WFDC2", "CXXC5", "CRIP2", "TGIF1", "KRT19", "PAX8", "CLDN1", "PON2", "RASSF7", "SPINT1", "DKK3", "CADM1", "ATF3", "CXADR", "DPP7", "FLRT3", "ZBTB20", "WDR34", "KIF21A") 
+
+p1 <- DotPlot(fetalmale, features = genelist, group.by = "vlngroup",col.min = -0.5,
+  col.max = 1.2) + RotatedAxis()+scale_color_gradient2(low="blue", mid="lightgray",high="red")
+p2 <- DotPlot(fetalmeso, features = genelist, group.by = "vlngroup",col.min = -0.5,
+  col.max = 1.2) + RotatedAxis()+scale_color_gradient2(low="blue", mid="lightgray",high="red")
+ggarrange(p1,p2, ncol = 1)
+
+
+genelist2 <- c("WT1", "CDH2", "SST", "SPRR2F", "IGFBP3", "FBXO32", "NRGN",  "CALY", "PRSS35", "NUDTA", "NDP", "IGFL2", "MGP", "CTGF", "CYR61", "CPE", "WNT2B", "NCAM1", "AMHR2", "LEF1", "NUDT10", "ANKH", "MYLIP", "CXCR4", "SPRY1")
+
+p1 <- DotPlot(fetalmale, features = genelist2, group.by = "vlngroup",col.min = -0.5,
+  col.max = 1.2, scale.min = 0, scale.max = 95) + RotatedAxis()+scale_color_gradient2(low="blue", mid="lightgray",high="red")
+p2 <- DotPlot(fetalmeso, features = genelist2, group.by = "vlngroup",col.min = -0.5,
+  col.max = 1.2, scale.min = 0, scale.max = 95) + RotatedAxis()+scale_color_gradient2(low="blue", mid="lightgray",high="red")
+ggarrange(p1,p2, ncol = 1)
+
+
+```
+
+
+
+
+##Figure 4C
+```{r, echo=TRUE, error=TRUE}
+
+###################venn diagram######################
+nrow(rete.deg.filtered)
+nrow(meso.deg.filtered)
+conservegenes4 <- intersect(rownames(rete.deg.filtered), rownames(meso.deg.filtered) )
+length(conservegenes4)
+
+
+rete.deg.uni <- rete.deg.filtered[-which(rownames(rete.deg.filtered) %in% conservegenes4),]
+meso.deg.uni <- meso.deg.filtered[-which(rownames(meso.deg.filtered) %in% conservegenes4),]
+
+##############
+df <- as.data.frame(c(conservegenes4, rownames(rete.deg.uni), rownames(meso.deg.uni))  )
+colnames(df) <- "genes"
+df$group <- "common"
+df$group[which(df$genes %in% rownames(rete.deg.uni))] <- "rete.uni"
+df$group[which(df$genes %in% rownames(meso.deg.uni))] <- "meso.uni"
+
+
+##write.table(df, file = paste0(outputDir, "/rete_meso.markers.tsv"), sep = "\t", quote = FALSE)
+
+
+####################GO analysis################################
+library(DOSE)
+library(org.Hs.eg.db)
+library(clusterProfiler)
+hs <- org.Hs.eg.db
+
+
+f1 <-AnnotationDbi::select(hs, 
+            keys = df$genes[which(df$group=="common")],
+            columns = c("ENTREZID", "SYMBOL"),
+            keytype = "SYMBOL")
+
+f2 <-AnnotationDbi::select(hs, 
+            keys = df$genes[which(df$group=="rete.uni")],
+            columns = c("ENTREZID", "SYMBOL"),
+            keytype = "SYMBOL")
+
+f3 <-AnnotationDbi::select(hs, 
+            keys = df$genes[which(df$group=="meso.uni")],
+            columns = c("ENTREZID", "SYMBOL"),
+            keytype = "SYMBOL")
+
+
+f1 <- f1[complete.cases(f1), ]
+f2 <- f2[complete.cases(f2), ]
+f3 <- f3[complete.cases(f3), ]
+
+f1 <- as.character(f1$ENTREZID)
+f2 <- as.character(f2$ENTREZID)
+f3 <- as.character(f3$ENTREZID)
+
+k1 <- enrichGO(gene = f1,ont = "BP",
+                 OrgDb= org.Hs.eg.db)
+
+
+k2 <- enrichGO(gene = f2,ont = "BP",
+                 OrgDb= org.Hs.eg.db)
+
+k3 <- enrichGO(gene = f3,ont = "BP",
+                 OrgDb= org.Hs.eg.db)
+
+
+y1 <-as.data.frame(k1)
+y2 <-as.data.frame(k2)
+y3 <-as.data.frame(k3)
+
+######################################################
+library(tidyr)
+library(dplyr)
+
+t1<- y1 %>% 
+    mutate(geneID = strsplit(as.character(geneID), "/")) %>% 
+    unnest(geneID)
+
+
+g1 <-AnnotationDbi::select(hs, 
+            keys = t1$geneID,
+            columns = c("ENTREZID", "SYMBOL"),
+            keytype = "ENTREZID")
+
+
+nrow(t1)
+nrow(g1)
+
+t1$name <- g1$SYMBOL
+
+####################################################
+t2<- y2 %>% 
+    mutate(geneID = strsplit(as.character(geneID), "/")) %>% 
+    unnest(geneID)
+
+
+g2 <-AnnotationDbi::select(hs, 
+            keys = t2$geneID,
+            columns = c("ENTREZID", "SYMBOL"),
+            keytype = "ENTREZID")
+
+
+nrow(t2)
+nrow(g2)
+
+t2$name <- g2$SYMBOL
+
+####################################################
+t3<- y3 %>% 
+    mutate(geneID = strsplit(as.character(geneID), "/")) %>% 
+    unnest(geneID)
+
+
+g3 <-AnnotationDbi::select(hs, 
+            keys = t3$geneID,
+            columns = c("ENTREZID", "SYMBOL"),
+            keytype = "ENTREZID")
+
+
+nrow(t3)
+nrow(g3)
+
+t3$name <- g3$SYMBOL
+
+#####################################################
+##write.table(t1, file = paste0(outputDir, "/rete_meso.common.GO.tsv"), sep = "\t", quote = FALSE)
+##write.table(t2, file = paste0(outputDir, "/rete.uni.GO.tsv"), sep = "\t", quote = FALSE)
+##write.table(t3, file = paste0(outputDir, "/meso.uni.GO.tsv"), sep = "\t", quote = FALSE)
+
+
+```
+
+
+
+
+
+##Figure 5 and Figure S3A
+```{r, echo=TRUE, error=TRUE}
+
+##############Fig 5A######################
+DimPlot(object = fetalfemale, 
+        reduction = "umap", label = TRUE)
+DimPlot(object = fetalfemale, 
+        reduction = "umap", group.by = "age")
+
+
+##############Fig 5B######################
+FeaturePlot(object = fetalfemale, features = c("POU5F1", "DDX4", 'DCN', "RGS5", "PECAM1", "CD53", "KRT18", "WT1", "FOXL2", "KITLG", "GATM", "PODXL"), reduction = "umap", ncol=6) 
+
+
+##############Fig 5C######################
+FeaturePlot(object = fetalfemale, features = c("PAX8", "KRT19", "PCP4", "PERP"), reduction = "umap") 
+
+
+##############Fig S3A######################
+FeaturePlot(object = fetalfemale, features = c("MKI67", "TOP2A"), reduction = "umap") 
+
+
+```
+
+
+
+
+
+##Figure S3D, S3E, Figure 6A and 6B
+```{r, echo=TRUE, error=TRUE}
+
+###########subclustering#######################
+length(which(Idents(fetalfemale)=='0'))
+
+frete <- subset(fetalfemale, idents = '0')
+
+frete <- FindVariableFeatures(frete, selection.method = "vst")
+
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(frete), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(frete)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+
+
+# Scaling the data
+all.genes <- rownames(frete)
+frete <- ScaleData(frete, features = all.genes)
+
+
+frete <- RunPCA(frete)
+
+# Examine and visualize PCA results a few different ways
+print(frete[["pca"]], dims = 1:5, nfeatures = 5)
+
+VizDimLoadings(frete, dims = 1:2, reduction = "pca")
+
+DimPlot(frete, reduction = "pca")
+DimPlot(frete, reduction = "pca", group.by = "origin")
+
+
+DimHeatmap(frete, dims = 1, cells = 500, balanced = TRUE)
+
+
+ElbowPlot(frete)
+
+##cluster
+
+frete <- FindNeighbors(frete, dims = 1:11)
+frete <- FindClusters(frete, resolution = 0.4)
+
+
+frete <- RunUMAP(frete, dims = 1:11)
+
+##############Fig S3D######################
+DimPlot(frete, reduction = "umap")
+DimPlot(frete, reduction = "umap", group.by = "age")
+
+##############Fig S3E######################
+expr1 <- GetAssayData(object = frete, slot = "data")
+groupIdentity<- Idents(frete)
+colnames(expr1) <- Idents(frete)
+
+meanDF <- do.call(cbind, lapply(unique(groupIdentity), function(id) {
+  groupCounts <- expr1[, colnames(expr1) == id]
+  df <- data.frame(c = apply(groupCounts, 1, mean))
+  colnames(df) <- id
+  return(df)
+}))
+
+rv <- rowVars(as.matrix(meanDF))
+idx <- order(-rv)[1:50]
+e <- as.matrix(meanDF)
+top50 <-  e[idx,]
+
+heatmap.2(top50, trace = "none")
+
+
+##############Fig 6A######################
+
+fetalfemale$clusters <- as.character(fetalfemale$seurat_clusters) 
+
+fR0 <- colnames(frete)[which(Idents(frete)=='0')]
+fR1 <- colnames(frete)[which(Idents(frete)=='1')]
+fR2 <- colnames(frete)[which(Idents(frete)=='2')]
+fR3 <- colnames(frete)[which(Idents(frete)=='3')]
+fR4 <- colnames(frete)[which(Idents(frete)=='4')]
+
+fetalfemale$clusters[which(colnames(fetalfemale) %in% fR0)] <- "fR0"
+fetalfemale$clusters[which(colnames(fetalfemale) %in% fR1)] <- "fR1"
+fetalfemale$clusters[which(colnames(fetalfemale) %in% fR2)] <- "fR2"
+fetalfemale$clusters[which(colnames(fetalfemale) %in% fR3)] <- "fR3"
+fetalfemale$clusters[which(colnames(fetalfemale) %in% fR4)] <- "fR4"
+
+fetalfemale$clusters[which(fetalfemale$clusters != 'fR4')] <- "rest"
+DimPlot(fetalfemale, reduction = "umap", group.by = "clusters")
+
+##############Fig 6B######################
+df <-as.data.frame(table(fetalfemale$age, fetalfemale$clusters))  
+
+
+# Transform this data in %
+df$perct2 <- df$Freq/sum(df$Freq[which(df$Var1=="wpf_09a")])
+df$perct2[which(df$Var1=="wpf_09b")] <- df$Freq[which(df$Var1=="wpf_09b")]/sum(df$Freq[which(df$Var1=="wpf_09b")])
+df$perct2[which(df$Var1=="wpf_w16")] <- df$Freq[which(df$Var1=="wpf_w16")]/sum(df$Freq[which(df$Var1=="wpf_w16")])
+
+# Stacked
+ggplot(df, aes(fill=Var2, y=perct2, x=Var1, label = Var2)) + 
+    geom_bar(position="stack", stat="identity")+
+  geom_text(size = 3, position = position_stack(vjust = 0.5))
+
+```
+
+
+
+##Figure S3F, S3G, Figure 6C to 6E
+```{r, echo=TRUE, error=TRUE}
+
+##############Fig S3F######################
+length(fR4)  #36
+length(colnames(fetalfemale)[-which(colnames(fetalfemale) %in%  c(fR4))] )  # 3473
+ncol(fetalfemale)  # error check
+
+set.seed(65)
+sampledCellIDs <- sample(x = colnames(fetalfemale)[-which(colnames(fetalfemale) %in% c(fR4))], size = 100, replace = FALSE)
+
+DimPlot(object = fetalfemale, 
+             reduction = "umap",
+             cells.highlight = sampledCellIDs)
+
+
+##############Fig 6C######################
+frete.deg <- FindMarkers(fetalfemale, ident.1 = c(fR4), ident.2 = sampledCellIDs)
+frete.deg.filtered <- frete.deg %>%
+    filter(avg_log2FC > 0.5 & p_val_adj < 0.05)
+
+conservegenes.sex <- intersect(rownames(rete.deg.filtered), rownames(frete.deg.filtered) )
+conserve.all <- intersect(conservegenes.sex, rownames(meso.deg.filtered) )
+
+conservmeso.female <- intersect(rownames(meso.deg.filtered), rownames(frete.deg.filtered) )
+
+EnhancedVolcano(frete.deg,
+    lab = NA,
+    x = 'avg_log2FC',
+    y = 'p_val_adj',
+    pCutoff = 0.05,
+    FCcutoff = 0.5)
+
+
+##############Fig 6D######################
+nrow(rete.deg.filtered)
+nrow(frete.deg.filtered)
+length(conservegenes.sex)
+
+rete.deg.uni <- rete.deg.filtered[-which(rownames(rete.deg.filtered) %in% conservegenes.sex),]
+frete.deg.uni <- frete.deg.filtered[-which(rownames(frete.deg.filtered) %in% conservegenes.sex),]
+
+
+##############Fig 6E######################
+fetalfemale$vlngroup <- "unselected"
+fetalfemale$vlngroup[which(colnames(fetalfemale) %in% sampledCellIDs )]  <- "rest"
+fetalfemale$vlngroup[which(colnames(fetalfemale) %in% fR4 )]  <- "female.rete"
+
+
+DotPlot(fetalfemale, features = rownames(conserve.all), group.by = "vlngroup" ,  col.min = -1.5,
+  col.max = 1.5) + RotatedAxis()+scale_color_gradient2(low="blue", mid="lightgray",high="red")
+DotPlot(fetalmale, features = rownames(conserve.all), group.by = "vlngroup",   col.min = -0.65,
+  col.max = 1.5) + RotatedAxis()+scale_color_gradient2(low="blue", mid="lightgray",high="red")
+DotPlot(fetalmeso, features = rownames(conserve.all), group.by = "vlngroup",col.min = -0.65,
+  col.max = 1.5) + RotatedAxis()+scale_color_gradient2(low="blue", mid="lightgray",high="red")
+
+
+DotPlot(fetalfemale, features = conservegenes.sex, group.by = "vlngroup") + RotatedAxis()+scale_color_gradient2(low="blue", mid="lightgray",high="red")
+DotPlot(fetalmale, features = conservegenes.sex, group.by = "vlngroup") + RotatedAxis()+scale_color_gradient2(low="blue", mid="lightgray",high="red")
+DotPlot(fetalmeso, features = conservegenes.sex, group.by = "vlngroup",col.min = -0.65,
+  col.max = 1.5) + RotatedAxis()+scale_color_gradient2(low="blue", mid="lightgray",high="red")
+
+
+DotPlot(fetalfemale, features = rownames(frete.deg.uni), group.by = "vlngroup" ,  col.min = -1.5,
+  col.max = 1.5) + RotatedAxis()+scale_color_gradient2(low="blue", mid="lightgray",high="red")
+DotPlot(fetalmale, features = rownames(frete.deg.uni), group.by = "vlngroup",   col.min = -0.65,
+  col.max = 1.5) + RotatedAxis()+scale_color_gradient2(low="blue", mid="lightgray",high="red")
+DotPlot(fetalmeso, features = rownames(frete.deg.uni), group.by = "vlngroup",col.min = -0.65,
+  col.max = 1.5) + RotatedAxis()+scale_color_gradient2(low="blue", mid="lightgray",high="red")
+
+
+##############Fig S3G######################
+genelist <- c("PLAC1", "STK17B","CXCL14", "PNISR", "IFI6", "MALAT1", "CIRBP", "TSC22D3", "LUC7L3", "STRA6")
+
+###############
+fetalmale$trimester <- fetalmale$age
+fetalmale$trimester[which(fetalmale$trimester %in% c("w6",  "w7",  "w8", "9aw", "9bw") )] <- "1T"
+fetalmale$trimester[which(fetalmale$trimester %in% c("w12", "w15", "w16", "18w") )] <- "2T"
+
+fetalmale$vlngroup2 <- paste(fetalmale$trimester, fetalmale$vlngroup)
+
+DotPlot(fetalmale, features = genelist, group.by = "vlngroup2",col.min = -0.5,
+  col.max = 1.2) + RotatedAxis()+scale_color_gradient2(low="blue", mid="lightgray",high="red")
+
+```
+
+
+
+
+
