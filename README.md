@@ -1,4 +1,4 @@
-# Scripts for simgle cell RNAseq embryo gonads and mesonephros analysis
+# Scripts for single cell RNA-seq embryo gonads and mesonephros analysis
 
 ## Order of script execution
 1. mesonephros_demultiplex.Rmd
